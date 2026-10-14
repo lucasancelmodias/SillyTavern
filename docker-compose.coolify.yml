@@ -39,20 +39,24 @@ services:
       SILLYTAVERN_BROWSERLAUNCH_ENABLED: "false"
 
       # -- User accounts --
-      # Admin users must have a password before the IP whitelist is turned off,
-      # or SillyTavern refuses to start.
+      # The built-in admin "default-user" starts without a password, and while
+      # it is the only account SillyTavern logs every visitor in as it. Set a
+      # password before publishing (docker/COOLIFY.md, step 3). With the IP
+      # whitelist off, SillyTavern refuses to start until admins have one.
       SILLYTAVERN_ENABLEUSERACCOUNTS: ${SILLYTAVERN_ENABLEUSERACCOUNTS:-true}
       SILLYTAVERN_ENABLEDISCREETLOGIN: ${SILLYTAVERN_ENABLEDISCREETLOGIN:-true}
       # Seconds of inactivity before a login expires.
       SILLYTAVERN_SESSIONTIMEOUT: ${SILLYTAVERN_SESSIONTIMEOUT:-86400}
 
       # -- IP whitelist --
-      # A request passes only if BOTH the connecting IP and the client IP from
-      # X-Forwarded-For are listed. Behind `tailscale serve` the connecting IP is
-      # a Docker gateway (private ranges) and the client IP is a tailnet address
-      # (100.64.0.0/10, fd7a:115c:a1e0::/48). Requests through Coolify's Traefik
-      # carry a public client IP and get 403, so an accidental public domain does
-      # not expose the instance. Set to "false" for public-domain mode.
+      # Behind `tailscale serve` the connecting IP is a Docker gateway (private
+      # ranges) and X-Forwarded-For holds the tailnet client (100.64.0.0/10,
+      # fd7a:115c:a1e0::/48). Both are checked against this one list; requests
+      # without X-Forwarded-For are checked on the connecting IP alone. Through
+      # Coolify's proxy it only rejects IPv4 visitors that connect directly:
+      # IPv6 visitors and Cloudflare Tunnels arrive with a private address. The
+      # host whitelist below is what keeps an accidental public domain closed.
+      # Set to "false" for public-domain mode.
       SILLYTAVERN_WHITELISTMODE: ${SILLYTAVERN_WHITELISTMODE:-true}
       SILLYTAVERN_ENABLEFORWARDEDWHITELIST: "true"
       SILLYTAVERN_WHITELIST: '["127.0.0.1","::1","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10","fd7a:115c:a1e0::/48"]'
@@ -67,12 +71,17 @@ services:
       SILLYTAVERN_FORWARDEDHEADERS_XFORWARDEDFOR: "true"
       SILLYTAVERN_FORWARDEDHEADERS_CFCONNECTINGIP: "false"
       # Rate-limit failed logins per client instead of per proxy. Safe only
-      # because the port is never published publicly (see "ports" below).
+      # while nothing in front keeps a client-supplied X-Forwarded-For: the
+      # port stays on loopback (see "ports" below) and Coolify's proxy trusts
+      # no upstream proxy. Never add Cloudflare to its trusted IPs; see
+      # "Cloudflare" in docker/COOLIFY.md.
       SILLYTAVERN_RATELIMITING_PREFERREALIPHEADER: "true"
 
-      # -- Host header whitelist (blocks DNS rebinding) --
+      # -- Host header whitelist --
       # Hostnames allowed in the Host header. IPs and localhost are always
       # allowed. Matching is exact; a leading dot also matches subdomains.
+      # Blocks DNS rebinding, and answers any domain Coolify routes here
+      # (e.g. a generated sslip.io one) with 403 until you list it.
       # For a public domain, add it, e.g. '[".ts.net","st.example.com"]'.
       # Never set SILLYTAVERN_HOSTWHITELIST_ENABLED to "false": SillyTavern
       # reads any non-empty value as true.
@@ -80,10 +89,12 @@ services:
       SILLYTAVERN_HOSTWHITELIST_HOSTS: '[".ts.net"]'
 
       # -- Outbound request filter (SSRF protection) --
-      # Blocks server-side requests to private addresses, such as the Coolify
-      # dashboard and other containers on this host. Tailscale IPv4 addresses
-      # are not blocked. If an LLM backend lives on a private network, add its
-      # range to the list below (it replaces the defaults, so keep loopback).
+      # Blocks server-side requests to Docker networks and other private
+      # (RFC 1918) addresses. It does not block the VPS's own public or tailnet
+      # IP, so ports the host publishes (like the Coolify dashboard) and other
+      # tailnet devices stay reachable through SillyTavern: only give accounts
+      # to people you trust. If an LLM backend lives on a private network, add
+      # its range below (the list replaces the defaults, so keep loopback).
       SILLYTAVERN_PRIVATEADDRESSWHITELIST_ENABLED: ${SILLYTAVERN_PRIVATEADDRESSWHITELIST_ENABLED:-true}
       SILLYTAVERN_PRIVATEADDRESSWHITELIST_ALLOWEDRANGES: '["127.0.0.0/8","::1/128","fd7a:115c:a1e0::/48"]'
     # Reachable only from the VPS itself, for `tailscale serve`. Never publish on
