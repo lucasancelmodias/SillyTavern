@@ -1,0 +1,115 @@
+# SillyTavern for Coolify (Docker Compose build pack).
+#
+# Coolify settings:
+#   Build Pack ............... Docker Compose
+#   Base Directory ........... /
+#   Docker Compose Location .. /docker-compose.coolify.yml
+#
+# The defaults below are for PRIVATE access over Tailscale: no Coolify domain,
+# port published on the host's loopback only, and `tailscale serve` on the host
+# in front of it. For a public domain instead, see "Public domain" in
+# docker/COOLIFY.md before changing anything here.
+#
+# Settings under "environment:" written as ${NAME:-default} show up as
+# editable variables in Coolify's "Environment Variables" tab. The rest are
+# fixed here on purpose; change them by editing this file, since Coolify
+# variables cannot override them. config.yaml on the config volume keeps showing the defaults: these
+# SILLYTAVERN_* variables always take precedence over it.
+#
+# Full guide: docker/COOLIFY.md
+
+services:
+  sillytavern:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # SillyTavern derives the session cookie name from the container hostname.
+    # Keep it fixed, or every redeploy logs everyone out.
+    hostname: sillytavern
+    environment:
+      NODE_ENV: production
+      FORCE_COLOR: "1"
+
+      # Run as the unprivileged "node" user instead of root.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+
+      # Drives the healthcheck below.
+      SILLYTAVERN_HEARTBEATINTERVAL: "30"
+      SILLYTAVERN_BROWSERLAUNCH_ENABLED: "false"
+
+      # -- User accounts --
+      # Admin users must have a password before the IP whitelist is turned off,
+      # or SillyTavern refuses to start.
+      SILLYTAVERN_ENABLEUSERACCOUNTS: ${SILLYTAVERN_ENABLEUSERACCOUNTS:-true}
+      SILLYTAVERN_ENABLEDISCREETLOGIN: ${SILLYTAVERN_ENABLEDISCREETLOGIN:-true}
+      # Seconds of inactivity before a login expires.
+      SILLYTAVERN_SESSIONTIMEOUT: ${SILLYTAVERN_SESSIONTIMEOUT:-86400}
+
+      # -- IP whitelist --
+      # A request passes only if BOTH the connecting IP and the client IP from
+      # X-Forwarded-For are listed. Behind `tailscale serve` the connecting IP is
+      # a Docker gateway (private ranges) and the client IP is a tailnet address
+      # (100.64.0.0/10, fd7a:115c:a1e0::/48). Requests through Coolify's Traefik
+      # carry a public client IP and get 403, so an accidental public domain does
+      # not expose the instance. Set to "false" for public-domain mode.
+      SILLYTAVERN_WHITELISTMODE: ${SILLYTAVERN_WHITELISTMODE:-true}
+      SILLYTAVERN_ENABLEFORWARDEDWHITELIST: "true"
+      SILLYTAVERN_WHITELIST: '["127.0.0.1","::1","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10","fd7a:115c:a1e0::/48"]'
+      SILLYTAVERN_WHITELISTDOCKERHOSTS: "false"
+
+      # -- Client IP headers --
+      # SillyTavern trusts these headers from any client. `tailscale serve` does
+      # not strip X-Real-IP, so a tailnet device could fake its IP with it.
+      # X-Forwarded-For is rewritten by both `tailscale serve` and Coolify's
+      # Traefik, so it is the only one to trust. Do not change these.
+      SILLYTAVERN_FORWARDEDHEADERS_XREALIP: "false"
+      SILLYTAVERN_FORWARDEDHEADERS_XFORWARDEDFOR: "true"
+      SILLYTAVERN_FORWARDEDHEADERS_CFCONNECTINGIP: "false"
+      # Rate-limit failed logins per client instead of per proxy. Safe only
+      # because the port is never published publicly (see "ports" below).
+      SILLYTAVERN_RATELIMITING_PREFERREALIPHEADER: "true"
+
+      # -- Host header whitelist (blocks DNS rebinding) --
+      # Hostnames allowed in the Host header. IPs and localhost are always
+      # allowed. Matching is exact; a leading dot also matches subdomains.
+      # For a public domain, add it, e.g. '[".ts.net","st.example.com"]'.
+      # Never set SILLYTAVERN_HOSTWHITELIST_ENABLED to "false": SillyTavern
+      # reads any non-empty value as true.
+      SILLYTAVERN_HOSTWHITELIST_ENABLED: "true"
+      SILLYTAVERN_HOSTWHITELIST_HOSTS: '[".ts.net"]'
+
+      # -- Outbound request filter (SSRF protection) --
+      # Blocks server-side requests to private addresses, such as the Coolify
+      # dashboard and other containers on this host. Tailscale IPv4 addresses
+      # are not blocked. If an LLM backend lives on a private network, add its
+      # range to the list below (it replaces the defaults, so keep loopback).
+      SILLYTAVERN_PRIVATEADDRESSWHITELIST_ENABLED: ${SILLYTAVERN_PRIVATEADDRESSWHITELIST_ENABLED:-true}
+      SILLYTAVERN_PRIVATEADDRESSWHITELIST_ALLOWEDRANGES: '["127.0.0.0/8","::1/128","fd7a:115c:a1e0::/48"]'
+    # Reachable only from the VPS itself, for `tailscale serve`. Never publish on
+    # all interfaces ("8001:8000"): Docker-published ports bypass ufw, and the
+    # client IP headers above would become spoofable. Host port 8000 belongs to
+    # the Coolify dashboard.
+    ports:
+      - "127.0.0.1:${ST_LOCAL_PORT:-8001}:8000"
+    # Container port Coolify's proxy targets if you add a domain.
+    expose:
+      - "8000"
+    volumes:
+      - st-config:/home/node/app/config
+      - st-data:/home/node/app/data
+      - st-plugins:/home/node/app/plugins
+      - st-extensions:/home/node/app/public/scripts/extensions/third-party
+    healthcheck:
+      test: ["CMD", "node", "src/healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  st-config:
+  st-data:
+  st-plugins:
+  st-extensions:

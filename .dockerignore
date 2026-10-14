@@ -7,6 +7,7 @@
 /Dockerfile
 /.dockerignore
 /docker/docker-compose.yml
+/docker-compose.coolify.yml
 /docker/config
 /docker/extensions
 /docker/data
